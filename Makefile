@@ -1,50 +1,38 @@
-CFLAGS=-std=c11 -g -fno-common -Wall -Wno-switch
+include config.mk
 
-SRCS=$(wildcard *.c)
-OBJS=$(SRCS:.c=.o)
+.c.o:
+	$(CC) -o $@ -c $< $(CFLAGS)
 
-TEST_SRCS=$(wildcard test/*.c)
-TESTS=$(TEST_SRCS:.c=.exe)
+stage1: $(OBJ)
+	$(CC) -o chibicc $(OBJ) $(CFLAGS) $(LDFLAGS)
+stage2: $(STAGETWO_OBJ)
+	./chibicc -o stage2/chibicc $(OBJ) $(CFLAGS) $(LDFLAGS)
 
-# Stage 1
-
-chibicc: $(OBJS)
-	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
-
-$(OBJS): chibicc.h
-
-test/%.exe: chibicc test/%.c
-	./chibicc -Iinclude -Itest -c -o test/$*.o test/$*.c
-	$(CC) -pthread -o $@ test/$*.o -xc test/common
-
-test: $(TESTS)
-	for i in $^; do echo $$i; ./$$i || exit 1; echo; done
-	test/driver.sh ./chibicc
-
-test-all: test test-stage2
-
-# Stage 2
-
-stage2/chibicc: $(OBJS:%=stage2/%)
-	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
-
-stage2/%.o: chibicc %.c
-	mkdir -p stage2/test
-	./chibicc -c -o $(@D)/$*.o $*.c
-
-stage2/test/%.exe: stage2/chibicc test/%.c
-	mkdir -p stage2/test
-	./stage2/chibicc -Iinclude -Itest -c -o stage2/test/$*.o test/$*.c
-	$(CC) -pthread -o $@ stage2/test/$*.o -xc test/common
-
-test-stage2: $(TESTS:test/%=stage2/test/%)
-	for i in $^; do echo $$i; ./$$i || exit 1; echo; done
-	test/driver.sh ./stage2/chibicc
-
-# Misc.
+test1: chibicc
+	$(MAKE) -C test/
+test2: stage2/chibicc
+	$(MAKE) -C stage2/test/
 
 clean:
-	rm -rf chibicc tmp* $(TESTS) test/*.s test/*.exe stage2
-	find * -type f '(' -name '*~' -o -name '*.o' ')' -exec rm {} ';'
+	rm -rf chibicc stage2
+	rm -f `find . -type f '(' -name '*.o' -o -name '*~' ')'`
+ifdef TEST
+	$(MAKE) -C tests/ clean
+endif
 
-.PHONY: test clean test-stage2
+
+ifdef STAGETWO
+ifdef TEST
+all: clean stage1 test1 stage2 test2
+else
+all: clean stage1 stage2
+endif
+else
+ifdef TEST
+all: clean stage1 test1
+else
+all: clean stage1
+endif
+endif
+
+.PHONY: all

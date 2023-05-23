@@ -1,0 +1,160 @@
+#!/bin/sh
+
+die() {
+	x=$2
+	printf "$1: Failed with $2\n" >&2
+	shift 2
+	printf '%s\n' $@ >&2
+	exit $x
+}
+
+if [ "$CC" = "" ]; then
+	for i in `printf "$PATH\n" | tr ':' '\n'`; do
+		if [ -x "$i/gcc" ]; then
+			CC="gcc"
+			break
+		elif [ -x "$i/clang" ]; then
+			CC="clang"
+			break
+		elif [ -x "$i/cc" ]; then
+			CC="cc"
+			break
+		fi
+	done
+fi
+[ "$CC" = "" ] && die $0 1
+
+NL="\n"
+
+DEF_CFLAGS="-std=c11 -g -fno-common -Wall -Wno-switch -O2 -pipe"
+SRC=`printf '%s\n' *.c | tr '\n' ' '`
+OBJ="`printf '%s\n' *.c | sed 's/[.]c$/.o/' | tr '\n' ' '`"
+STAGETWO_OBJ="`printf 'stage2/%s ' *.c | sed 's/[.]c$/.o/' | tr '\n' ' '`"
+SRC_TEST=`printf '%s\n' tests/*.c | tr '\n' ' '`
+OBJ_TEST=`printf '%s\n' tests/*.c | sed 's/[.]c$/.o/' | tr '\n' ' '`
+STAGETWO_TEST_OBJ="`printf 'stage2/%s\n' tests/*.c | sed 's/[.]c$/.o/' | tr '\n' ' '`"
+
+#LIBC="dietlibc"
+STAGETWO=true
+STATIC=false
+PREFIX="/usr/local"
+STRIP=false
+DEBUG=false
+DEVDBG=false
+TARGET=`$CC -dumpmachine`
+TEST=true
+
+if [ "$TARGET" = "" ]; then
+	targetguess="`uname -m`-`uname -s|awk '{print tolower($0)}'`"
+	for path in "/include" "/usr/include" "/usr/local/include"; do
+		if [ -d $path/$targetguess-* ]; then
+			TARGET=$path/$targetguess-*
+			break
+		fi
+	done
+fi
+
+while [ $# -ge 1 ]; do
+	case `printf '%s\n' "$1" | sed 's/^--/-/'` in
+		-h*)
+			printf "Usage: [var=value] $0 [option]... [var=value]\n\nOptions:\n"
+			printf '\t%b\n' \
+'-help\t\t\tShow this message' \
+'-prefix=PREFIX\t\tInstall to PREFIX [/usr/local]' \
+"-target=TARGET\t\tTriplet to generate code for [$TARGET]" \
+'-static\t\t\tLink statically where possible' \
+'-Strip\t\t\tStrip binary. Will split debug info if -debug is specified' \
+'-debug\t\t\tEnable debug information' \
+'-Developer\t\tEnable higher levels of debug info, never strip debug info' \
+'-2-stage-disable\tDisable building second stage' \
+"-test-disable\t\tDon't run tests"
+#"--build=BUILD\t\ttriplet to build for [BUILD]" \
+#'--with-musl,glibc,\tenable system specific configuration' \
+#'      uclibc,uclibc-ng,' \
+#'      dietlibc,pdclib,' \
+#'      pdclib-ex' \
+			exit 0
+			;;
+		-2*)
+			STAGETWO=false
+			;;
+		-d*)
+			DEBUG=true
+			;;
+		-D*)
+			DEVDBG=true
+			;;
+		-s*)
+			STATIC=true
+			;;
+		-S*)
+			STRIP=true
+			;;
+		-t*=*)
+			TARGET="`printf "$1\n" | sed 's/.*=//'`"
+			;;
+		# ORDER IS HIGHLY IMPORTANT HERE
+		-t*)
+			TEST=false
+			;;
+		-p*=*)
+			PREFIX=`printf "$1\n" | sed 's/.*=//'`
+			;;
+		-b*=*)
+			die $0 1 "Building on non-targets is unimplemented"
+			;;
+		-program-prefix=*)
+			die $0 1 "Program prefix support is unimplemented"
+			;;
+		-program-suffix=*)
+			die $0 1 "Program suffix support is unimplemented"
+			;;
+		-program-transform-name=*)
+			die $0 1 "Program transform support is unimplemented"
+			;;
+		-with-*)
+			die $0 1 "Specialized libc support is unimplemented"
+			;;
+		*=*)
+			eval name=`printf "$1\n" | sed 's/=.*//'`
+			eval val=`printf "$1\n" | sed 's/.*=//'`
+			VARS="`printf '%s\n' $name=$val $VARS`"
+			;;
+		*)
+			die $0 1 "$1 argument not supported"
+	esac
+	shift 1
+done
+
+if $STRIP && $DEVDBG; then
+	STRIP='STRIP=true'
+elif $STRIP && $DEBUG; then
+	STRIP='STRIP=strip -g -o'
+elif $STRIP; then
+	STRIP='STRIP=strip -s'
+fi
+
+$STATIC && LDFLAGS="$LDFLAGS -static"
+
+[ "$CFLAGS" = "" ] && CFLAGS="$DEF_CFLAGS"
+
+if $DEVDBG; then
+	$DEBUG || CFLAGS="$CFLAGS -Wall -Werror"
+	CFLAGS="$CFLAGS -pedantic -pedantic-errors"
+fi
+
+$DEBUG && CFLAGS="$CFLAGS -Wall"
+
+if $STAGETWO; then
+	rm -rf stage2
+	mkdir -p stage2
+	cp -r tests stage2/tests/
+	cp `find . \! -name . -prune -type f` stage2/
+fi
+
+$STAGETWO && VARS="STAGETWO=true${NL}$VARS"
+$TEST && VARS="TEST=true${NL}$VARS"
+printf '%s\n' "CFLAGS=$CFLAGS" "LDFLAGS=$LDFLAGS" "TARGET=$TARGET" "OBJ=$OBJ" \
+	"PREFIX=$PREFIX" "TEST_OBJ=$OBJ_TEST"
+	"$VARS" \
+	> config.mk
